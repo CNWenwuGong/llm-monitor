@@ -1,0 +1,138 @@
+{
+  "note": "基准测试 Prompt 集。context_tokens 字段表示在发送前用填充文本补足到约该 Token 数（用于测长上下文性能衰减）。",
+  "suites": [
+    {
+      "id": "smoke",
+      "name": "快速冒烟套件",
+      "desc": "4 条用例、约 1 分钟跑完，用于快速验证链路与基线。",
+      "cases": ["short_math", "short_common", "code_two_sum", "long_article"]
+    },
+    {
+      "id": "standard",
+      "name": "标准基准套件",
+      "desc": "覆盖短问答 / 长生成 / 代码三类，8 条用例，适合做模型横向对比。",
+      "cases": ["short_math", "short_common", "short_reason", "code_two_sum", "code_sql", "long_article", "long_plan", "long_explain"]
+    },
+    {
+      "id": "longctx",
+      "name": "长上下文衰减套件",
+      "desc": "依次塞入 2k / 4k / 8k Token 上下文后提问，观察 TTFT 与 TPS 衰减。",
+      "cases": ["ctx_2k", "ctx_4k", "ctx_8k"]
+    },
+    {
+      "id": "throughput",
+      "name": "吞吐压力套件",
+      "desc": "固定 Prompt、拉高 max_tokens，测长生成的 TPS 稳定性。",
+      "cases": ["throughput_short", "throughput_mid", "throughput_long"]
+    },
+    {
+      "id": "all",
+      "name": "全量回归套件",
+      "desc": "上述全部用例，用于发版前的完整回归。",
+      "cases": ["short_math", "short_common", "short_reason", "code_two_sum", "code_sql", "long_article", "long_plan", "long_explain", "ctx_2k", "ctx_4k", "ctx_8k", "throughput_short", "throughput_mid", "throughput_long"]
+    }
+  ],
+  "cases": [
+    {
+      "id": "short_math",
+      "category": "short_qa",
+      "label": "短问答 · 数学计算",
+      "prompt": "计算 17 × 23 等于多少？请只给出结果和一行验算过程。",
+      "params": { "temperature": 0.1, "max_tokens": 128 }
+    },
+    {
+      "id": "short_common",
+      "category": "short_qa",
+      "label": "短问答 · 常识",
+      "prompt": "用一句话解释什么是 KV Cache，以及它为什么能加速大模型推理。",
+      "params": { "temperature": 0.3, "max_tokens": 192 }
+    },
+    {
+      "id": "short_reason",
+      "category": "short_qa",
+      "label": "短问答 · 逻辑推理",
+      "prompt": "三个人 A、B、C 中只有一人说真话。A 说：B 在说谎；B 说：C 在说谎；C 说：A 和 B 都在说谎。请问谁说真话？给出推理过程。",
+      "params": { "temperature": 0.2, "max_tokens": 320 }
+    },
+    {
+      "id": "code_two_sum",
+      "category": "code",
+      "label": "代码生成 · Two Sum",
+      "prompt": "用 Python 实现两数之和（Two Sum）：给定整数数组 nums 和目标值 target，返回和为 target 的两个数的下标。要求时间复杂度 O(n)，并用注释说明思路。",
+      "params": { "temperature": 0.2, "max_tokens": 512 }
+    },
+    {
+      "id": "code_sql",
+      "category": "code",
+      "label": "代码生成 · SQL 聚合",
+      "prompt": "有一张订单表 orders(id, user_id, amount, created_at)。请写一条 SQL：统计 2026 年 1 月每个用户的订单总额，并按总额从高到低排序，只取前 10 名。",
+      "params": { "temperature": 0.2, "max_tokens": 384 }
+    },
+    {
+      "id": "long_article",
+      "category": "long_gen",
+      "label": "长文本 · 文章写作",
+      "prompt": "写一篇 600 字左右的技术短文，主题是《本地部署大模型时如何做容量规划》，需要包含显存估算方法、并发与排队的关系、以及压测验证的步骤。",
+      "params": { "temperature": 0.7, "max_tokens": 1024 }
+    },
+    {
+      "id": "long_plan",
+      "category": "long_gen",
+      "label": "长文本 · 方案输出",
+      "prompt": "请为一家 50 人的公司设计一套内部大模型服务落地方案，覆盖硬件选型、模型选型、部署架构、权限与审计、成本核算五个部分，每个部分给出具体建议。",
+      "params": { "temperature": 0.7, "max_tokens": 1200 }
+    },
+    {
+      "id": "long_explain",
+      "category": "long_gen",
+      "label": "长文本 · 深度解释",
+      "prompt": "详细解释 Transformer 的注意力机制：从 Q/K/V 的直觉含义讲起，到缩放点积注意力的计算公式，再到多头注意力的作用与计算复杂度，最后说明它相对 RNN 的优势与代价。",
+      "params": { "temperature": 0.5, "max_tokens": 1024 }
+    },
+    {
+      "id": "ctx_2k",
+      "category": "long_context",
+      "label": "长上下文 · 2K",
+      "context_tokens": 2000,
+      "prompt": "以下是一段技术文档节选：\n\n{context}\n\n请用 3 条要点概括上述内容的主旨，并指出其中提到的性能瓶颈出现在哪个环节。",
+      "params": { "temperature": 0.2, "max_tokens": 384 }
+    },
+    {
+      "id": "ctx_4k",
+      "category": "long_context",
+      "label": "长上下文 · 4K",
+      "context_tokens": 4000,
+      "prompt": "以下是一段技术文档节选：\n\n{context}\n\n请用 3 条要点概括上述内容的主旨，并指出其中提到的性能瓶颈出现在哪个环节。",
+      "params": { "temperature": 0.2, "max_tokens": 384 }
+    },
+    {
+      "id": "ctx_8k",
+      "category": "long_context",
+      "label": "长上下文 · 8K",
+      "context_tokens": 8000,
+      "prompt": "以下是一段技术文档节选：\n\n{context}\n\n请用 3 条要点概括上述内容的主旨，并指出其中提到的性能瓶颈出现在哪个环节。",
+      "params": { "temperature": 0.2, "max_tokens": 384 }
+    },
+    {
+      "id": "throughput_short",
+      "category": "throughput",
+      "label": "吞吐 · 短输出",
+      "prompt": "请从 1 开始连续输出自然数，每行一个数字，不要写任何解释。",
+      "params": { "temperature": 0.0, "max_tokens": 256 }
+    },
+    {
+      "id": "throughput_mid",
+      "category": "throughput",
+      "label": "吞吐 · 中输出",
+      "prompt": "请不断重复输出这句话：「本地大模型性能监控平台正在持续生成 Token。」每行重复一次，不要写任何解释。",
+      "params": { "temperature": 0.0, "max_tokens": 512 }
+    },
+    {
+      "id": "throughput_long",
+      "category": "throughput",
+      "label": "吞吐 · 长输出",
+      "prompt": "请写一篇尽可能长的中文科普文章，主题是《大模型的推理过程》，不少于 1500 字，不要提前结束。",
+      "params": { "temperature": 0.6, "max_tokens": 2048 }
+    }
+  ]
+}

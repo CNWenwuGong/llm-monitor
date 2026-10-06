@@ -1,0 +1,21 @@
+· 选择内置演示后端
+  连接档案 = {"id":"1","text":"#1 内置演示模型（无需真实推理服务）（demo）"}  模型就绪=true
+  已开新会话（保证对话区只有本轮）
+· 发一轮对话（等它自己写完）
+  {"status":"完成","msgs":2,"hasCode":0,"hasTable":0,"bullets":5,"bold":13,"tokens":"587"}
+  截图 → docs/screenshots/01-dashboard.png (290 KB)
+  截图 → docs/screenshots/02-connections.png (69 KB)
+· 跑基准套件（smoke）
+  截图 → docs/screenshots/03-benchmark.png (106 KB)
+· 跑评测套件（mmlu_mini）
+  截图 → docs/screenshots/04-eval.png (152 KB)
+  截图 → docs/screenshots/05-eval-suites.png (176 KB)
+  截图 → docs/screenshots/06-eval-efficiency.png (86 KB)
+· 跑阶梯压测（1→2→4）
+  截图 → docs/screenshots/07-loadtest.png (150 KB)
+  截图 → docs/screenshots/08-history.png (164 KB)
+  截图 → docs/screenshots/09-alerts.png (94 KB)
+  截图 → docs/screenshots/10-chat-rich.png (163 KB)
+  截图 → docs/screenshots/11-dashboard-1300.png (266 KB)
+
+完成：11 张，未捕获异常 0 条

@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>本地大模型实时性能监控测试平台</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>&#128200;</text></svg>">
+<link rel="stylesheet" href="/style.css">
+<script src="/vendor/echarts.min.js"></script>
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand">
+    <span class="dot" id="brandDot"></span>
+    LLM Monitor Lab
+    <small id="hostInfo">—</small>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-panel="dashboard" class="active">实时看板</button>
+    <button data-panel="connections">连接管理</button>
+    <button data-panel="benchmark">基准测试</button>
+    <button data-panel="eval">评测中心</button>
+    <button data-panel="loadtest">并发压测</button>
+    <button data-panel="history">历史对比</button>
+    <button data-panel="alerts">告警阈值</button>
+  </nav>
+  <div class="ws-status" id="wsStatus"><span class="led"></span><span id="wsText">连接中…</span></div>
+</div>
+
+<main>
+
+<!-- ============ 1. 实时看板 ============ -->
+<section class="panel active" id="panel-dashboard">
+  <div class="sec-title">实时性能看板 <span class="tag" id="sampleBadge">采样中</span>
+    <span class="tag" id="gpuBadge" style="display:none"></span></div>
+  <!--<div class="sec-desc">左半屏为性能指标看板（推理性能 / 硬件资源 / 服务运行三层指标，采样间隔 <span id="intervalTxt">2</span> 秒，经 WebSocket 实时推送）；右半屏为对话测试，边聊边看资源与延迟曲线。</div>-->
+
+  <div class="dash-split">
+
+  <!-- ---------- 左半屏：性能指标看板 ---------- -->
+  <div class="dash-col">
+
+  <div class="row r4">
+    <div class="kpi green" id="kpi-tps"><div class="label">当前生成速度 TPS</div><div class="value" id="v-tps">0<span class="unit">tok/s</span></div><div class="sub" id="s-tps">等待推理请求</div></div>
+    <div class="kpi blue" id="kpi-ttft"><div class="label">首 Token 延迟 TTFT</div><div class="value" id="v-ttft">0<span class="unit">ms</span></div><div class="sub" id="s-ttft">平滑均值</div></div>
+    <div class="kpi cyan" id="kpi-e2e"><div class="label">端到端延迟 E2E</div><div class="value" id="v-e2e">0<span class="unit">ms</span></div><div class="sub" id="s-e2e">最近一次请求</div></div>
+    <div class="kpi purple" id="kpi-active"><div class="label">活跃请求 / RPS</div><div class="value" id="v-active">0<span class="unit">req</span></div><div class="sub" id="s-rps">RPS 0.00</div></div>
+  </div>
+  <div class="row r4">
+    <div class="kpi green" id="kpi-gpu"><div class="label">GPU 利用率</div><div class="value" id="v-gpu">—<span class="unit">%</span></div><div class="sub" id="s-gpu-name">—</div></div>
+    <div class="kpi yellow" id="kpi-vram"><div class="label">显存占用 VRAM</div><div class="value" id="v-vram">—<span class="unit">%</span></div><div class="sub" id="s-vram">—</div></div>
+    <div class="kpi purple" id="kpi-cpu"><div class="label">CPU 利用率</div><div class="value" id="v-cpu">0<span class="unit">%</span></div><div class="sub" id="s-cpu">—</div></div>
+    <div class="kpi blue" id="kpi-ram"><div class="label">内存占用</div><div class="value" id="v-ram">0<span class="unit">%</span></div><div class="sub" id="s-ram">—</div></div>
+  </div>
+
+  <div class="card mb12">
+    <div class="btn-row" style="justify-content:space-between">
+      <div class="btn-row">
+        <span class="small muted">时间窗口</span>
+        <button class="btn sm win-btn active" data-win="60">最近 1 分钟</button>
+        <button class="btn sm win-btn" data-win="300">最近 5 分钟</button>
+        <button class="btn sm win-btn" data-win="900">最近 15 分钟</button>
+        <button class="btn sm" id="btnPauseDash">暂停刷新</button>
+      </div>
+      <div class="btn-row">
+        <span class="badge blue" id="badgeReqs">累计请求 0</span>
+        <span class="badge green" id="badgeTokens">累计 Token 0</span>
+        <span class="badge red" id="badgeErrors">累计错误 0</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="row r2">
+    <div class="card"><h3>生成速度 TPS 与端到端延迟 <span class="hint">双 Y 轴 · 折线</span></h3><div class="chart tall" id="chart-tps"></div></div>
+    <div class="card"><h3>GPU 利用率与显存占用 <span class="hint">面积图</span></h3><div class="chart tall" id="chart-gpu"></div></div>
+  </div>
+
+  <div class="row r2">
+    <div class="card"><h3>CPU / 内存占用 <span class="hint">折线</span></h3><div class="chart" id="chart-cpu"></div></div>
+    <div class="card"><h3>服务运行指标 <span class="hint" id="nativeHint">来自推理服务自身</span></h3>
+      <div id="nativeMetrics" class="metric-list"><div class="empty">选择一个连接后自动拉取原生指标</div></div>
+    </div>
+  </div>
+
+  <div class="row r2">
+    <div class="card"><h3>硬件信息</h3><div id="sysInfo" class="metric-list"><div class="empty">加载中…</div></div></div>
+    <div class="card"><h3>运行日志 <span class="hint"><button class="btn sm" id="btnClearLog">清空</button></span></h3><div class="log" id="dashLog"></div></div>
+  </div>
+
+  </div>
+  <!-- ---------- 左半屏结束 ---------- -->
+
+  <!-- ---------- 右半屏：对话测试 ---------- -->
+  <div class="dash-col">
+
+  <div class="card mb12" id="chatCard">
+    <h3>对话测试
+      <span class="hint"><button class="btn sm" id="btnChatExpand">全屏</button></span>
+    </h3>
+    <div class="chat-bar">
+      <select id="chatSessionList" title="切换会话：历史与记忆按会话保存"></select>
+      <button class="btn sm" id="btnNewChat">新建</button>
+      <button class="btn sm" id="btnRenameChat">重命名</button>
+      <button class="btn sm" id="btnDeleteChat">删除</button>
+      <button class="btn sm" id="btnToggleMem">长期记忆</button>
+    </div>
+    <div class="chat-ctx" id="chatCtx">记忆：加载中…</div>
+    <div class="chat-box" id="chatBox"><div class="empty">还没有对话，输入一条 Prompt 开始测试。</div></div>
+    <div class="composer" id="chatComposer">
+      <textarea id="chatInput" rows="1"
+        placeholder="输入 Prompt…（Enter 发送 · Shift+Enter 换行）"></textarea>
+      <div class="composer-bar">
+        <div class="cb-left">
+          <button type="button" class="icb" id="btnComposerNew" title="新建会话" aria-label="新建会话">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <div class="chip-wrap">
+            <button type="button" class="chip" id="btnChipLen" aria-haspopup="menu" aria-expanded="false"
+              title="回答长度上限（默认不限制，交给模型自然停止）">
+              <span class="chip-ic" id="chipLenIc">∞</span>
+              <span class="chip-tx" id="chipLenTx">回答长度：不限制</span>
+              <svg class="caret" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+            </button>
+            <div class="chip-pop" id="chipLenPop" role="menu">
+              <div class="cp-title">回答长度上限</div>
+              <button type="button" class="cp-item" role="menuitem" data-len="0">不限制（模型自然停止）</button>
+              <button type="button" class="cp-item" role="menuitem" data-len="1024">1024 tokens</button>
+              <button type="button" class="cp-item" role="menuitem" data-len="2048">2048 tokens</button>
+              <button type="button" class="cp-item" role="menuitem" data-len="4096">4096 tokens</button>
+              <button type="button" class="cp-item" role="menuitem" data-len="8192">8192 tokens</button>
+              <div class="cp-sep"></div>
+              <button type="button" class="cp-item" role="menuitem" data-len="custom">自定义（用参数面板）</button>
+            </div>
+          </div>
+          <button type="button" class="icb" id="btnClearChat" title="清空当前会话的对话" aria-label="清空对话">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 7V5h4v2M6 7l1 12h10l1-12"/></svg>
+          </button>
+        </div>
+        <div class="cb-right">
+          <div class="model-pick" id="chatModelPick">
+            <span class="mp-ic" aria-hidden="true"></span>
+            <select id="chatModel" title="本会话使用的模型"></select>
+          </div>
+          <button type="button" class="icb stop" id="btnStopChat" disabled title="停止生成" aria-label="停止生成">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+          </button>
+          <button type="button" class="send-btn" id="btnSend" title="发送（Enter）">
+            <span class="sr-only">发送</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="composer-hint"><span id="chatStatus"></span></div>
+    </div>
+  </div>
+
+  <div class="card mb12" id="chatMemCard" style="display:none">
+    <h3>长期记忆 <span class="hint" id="chatMemStatus"></span></h3>
+    <div class="small muted" style="margin-bottom:8px">
+      这里的内容会<b>始终</b>拼进 System Prompt，不受对话轮次裁剪影响；也可让模型从当前对话里提炼。
+    </div>
+    <textarea id="chatMemory" class="mem-ta"
+      placeholder="例：&#10;- 用户在做本地大模型监控平台&#10;- 回答先给结论，再给依据，尽量用中文"></textarea>
+    <div class="btn-row">
+      <button class="btn primary sm" id="btnSaveMemory">保存记忆</button>
+      <button class="btn sm" id="btnDistillMemory">从对话提炼</button>
+      <button class="btn sm" id="btnClearMemory">清空</button>
+    </div>
+  </div>
+
+  <div class="card mb12">
+    <h3>本次请求指标 <span class="hint" id="chatRunId"></span></h3>
+    <div class="row r2" style="margin-bottom:0;gap:7px">
+      <div class="metric-item"><span class="k">首 Token 延迟 TTFT</span><span class="v" id="m-ttft">—</span></div>
+      <div class="metric-item"><span class="k">端到端耗时 E2E</span><span class="v" id="m-e2e">—</span></div>
+      <div class="metric-item"><span class="k">生成速度 TPS</span><span class="v" id="m-tps">—</span></div>
+      <div class="metric-item"><span class="k">纯生成耗时</span><span class="v" id="m-gent">—</span></div>
+      <div class="metric-item"><span class="k">Prompt Tokens</span><span class="v" id="m-pt">—</span></div>
+      <div class="metric-item"><span class="k">Completion Tokens</span><span class="v" id="m-ct">—</span></div>
+    </div>
+    <div class="mt12">
+      <div class="small muted">Token 利用率（completion / max_tokens）<span id="m-utilTxt" style="float:right">—</span></div>
+      <div class="bar-outer"><div class="bar-inner" id="m-utilBar" style="width:0%"></div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>参数面板</h3>
+    <label class="f"><span>连接档案</span><select id="chatConn"></select></label>
+    <div class="small muted" style="margin:-4px 0 10px">
+      模型在输入框工具栏里切换（<b>连接档案</b>决定可选项）。
+    </div>
+    <label class="f"><span>System Prompt（可选，会话级）</span><input id="chatSystem" placeholder="留空则不发送"></label>
+    <div class="row r2" style="margin-bottom:0;gap:14px">
+      <label class="f"><span>temperature <b class="mono" id="lblTemp">0.70</b></span>
+        <input type="range" id="chatTemp" min="0" max="2" step="0.05" value="0.7"></label>
+      <label class="f"><span>top_p <b class="mono" id="lblTopP">0.90</b></span>
+        <input type="range" id="chatTopP" min="0.1" max="1" step="0.05" value="0.9"></label>
+    </div>
+    <div class="row r2" style="margin-bottom:0;gap:14px">
+      <label class="f"><span>max_tokens（回答长度上限，勾选下方则不发送）</span>
+        <input type="number" id="chatMaxTokens" placeholder="不限制" min="0" max="65536" step="64" disabled></label>
+      <label class="f"><span>上下文预算（记忆窗口，token）</span>
+        <input type="number" id="chatCtxBudget" placeholder="默认 8192" min="512" step="512"></label>
+    </div>
+    <label class="f mt8" style="display:flex;gap:8px;align-items:center;margin-bottom:0">
+      <input type="checkbox" id="chatUnlimited" checked><span style="margin:0">不限制回答长度（<b>默认</b>；后端不再收到 max_tokens，由模型自然停止）</span>
+    </label>
+    <label class="f" style="margin-bottom:0">
+      <span>num_ctx（Ollama 专用，留空忽略）</span>
+      <input type="number" id="chatNumCtx" placeholder="留空忽略" min="512" step="512">
+    </label>
+    <label class="f mt8" style="display:flex;gap:8px;align-items:center;margin-bottom:0">
+      <input type="checkbox" id="chatSave" checked><span style="margin:0">保存到测试历史</span>
+    </label>
+    <label class="f mt8" style="display:flex;gap:8px;align-items:center;margin-bottom:0">
+      <input type="checkbox" id="chatUseMemory" checked><span style="margin:0">注入长期记忆</span>
+    </label>
+  </div>
+
+  </div>
+  <!-- ---------- 右半屏结束 ---------- -->
+
+  </div><!-- /dash-split -->
+</section>
+
+<!-- ============ 2. 连接管理 ============ -->
+<section class="panel" id="panel-connections">
+  <div class="sec-title">连接管理 <span class="tag">多实例 · 心跳探测</span></div>
+  <div class="sec-desc">管理本地推理服务的连接档案，支持 Ollama / vLLM / llama.cpp / OpenAI 兼容端点，以及离线可用的内置演示后端。</div>
+
+  <div class="row r-2-1">
+    <div class="card">
+      <h3>连接档案列表 <span class="hint"><button class="btn sm" id="btnRefreshConns">刷新</button></span></h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>状态</th><th>名称</th><th>后端</th><th>地址</th><th>默认模型</th><th>版本</th><th></th></tr></thead>
+          <tbody id="connTable"><tr><td colspan="7" class="empty">加载中…</td></tr></tbody>
+        </table>
+      </div>
+      <div class="small muted mt8">心跳探测每 10 秒自动执行一次；离线状态以红点标注。</div>
+    </div>
+
+    <div class="card">
+      <h3 id="connFormTitle">新增连接档案</h3>
+      <label class="f"><span>后端类型预设</span>
+        <select id="connPreset"></select>
+      </label>
+      <label class="f"><span>名称</span><input id="connName" placeholder="如：本机 Ollama"></label>
+      <label class="f"><span>后端类型</span>
+        <select id="connBackend">
+          <option value="demo">内置演示（离线可用）</option>
+          <option value="ollama">Ollama</option>
+          <option value="vllm">vLLM</option>
+          <option value="llama_cpp">llama.cpp server</option>
+          <option value="openai_compat">OpenAI 兼容通用</option>
+        </select>
+      </label>
+      <label class="f"><span>Base URL</span><input id="connUrl" placeholder="http://localhost:11434"></label>
+      <label class="f"><span>API Key（可选）</span><input id="connKey" placeholder="留空表示无需鉴权"></label>
+      <label class="f"><span>默认模型</span><input id="connModel" placeholder="可留空，测试连接后自动下拉选择"></label>
+      <div class="btn-row">
+        <button class="btn primary" id="btnSaveConn">保存档案</button>
+        <button class="btn" id="btnProbeConn">测试连接</button>
+        <button class="btn" id="btnResetConn">清空表单</button>
+      </div>
+      <div id="connProbeResult" class="mt12"></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 3. 基准测试 ============ -->
+<section class="panel" id="panel-benchmark">
+  <div class="sec-title">基准测试套件 <span class="tag">分位数统计</span></div>
+  <div class="sec-desc">内置短问答 / 长生成 / 长上下文 / 代码四类 Prompt，一键跑完自动汇总 P50 / P90 / P99 与箱线图。</div>
+
+  <div class="row r-1-2">
+    <div class="card">
+      <h3>套件配置</h3>
+      <label class="f"><span>连接档案</span><select id="benchConn"></select></label>
+      <label class="f"><span>模型</span><select id="benchModel"></select></label>
+      <label class="f"><span>测试套件</span><select id="benchSuite"></select></label>
+      <label class="f"><span>max_tokens 覆盖（0 表示使用用例默认值）</span>
+        <input type="number" id="benchMaxTokens" value="0" min="0" max="8192" step="64"></label>
+      <label class="f"><span>temperature 覆盖（留空使用用例默认值）</span>
+        <input type="number" id="benchTemp" placeholder="0.7" min="0" max="2" step="0.1"></label>
+      <div class="small muted mb12" id="benchSuiteDesc"></div>
+      <div class="btn-row">
+        <button class="btn primary" id="btnRunBench">开始跑套件</button>
+        <button class="btn danger" id="btnStopBench" disabled>停止</button>
+      </div>
+      <div class="mt12" id="benchProgress"></div>
+    </div>
+
+    <div>
+      <div class="row r2">
+        <div class="card"><h3>延迟分位数（箱线图） <span class="hint">TTFT / E2E / TPS</span></h3><div class="chart" id="chart-bench-box"></div></div>
+        <div class="card"><h3>各用例 TPS 与 TTFT</h3><div class="chart" id="chart-bench-bar"></div></div>
+      </div>
+      <div class="card">
+        <h3>汇总统计</h3>
+        <div id="benchSummary"><div class="empty">尚未运行套件</div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>用例明细</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>用例</th><th>类别</th><th class="num">上下文</th><th class="num">Prompt Tok</th><th class="num">Completion Tok</th><th class="num">TTFT (ms)</th><th class="num">E2E (ms)</th><th class="num">TPS</th><th>状态</th></tr></thead>
+        <tbody id="benchCaseTable"><tr><td colspan="9" class="empty">尚未运行套件</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 4. 评测中心 ============ -->
+<section class="panel" id="panel-eval">
+  <div class="sec-title">评测中心 <span class="tag">能力 / 质量 / 安全 / 效率</span></div>
+  <div class="sec-desc">覆盖 MMLU、GSM8K、BBH、HumanEval、pass@k、BLEU/ROUGE/CHRF++、F1、MT-Bench、NIAH、LongBench、指令遵循、幻觉率、有害拒绝率与越狱成功率。每个套件产出可判分的真实数值，同时顺带采集 TTFT / P95 / Prefill / Decode 吞吐。</div>
+
+  <div class="row r-1-2">
+    <div class="card">
+      <h3>评测配置</h3>
+      <label class="f"><span>连接档案</span><select id="evConn"></select></label>
+      <label class="f"><span>被测模型</span><select id="evModel"></select></label>
+      <label class="f"><span>运行模式</span><select id="evMode"></select></label>
+      <label class="f"><span>裁判模型（可选，用于 MT-Bench 打分）</span><select id="evJudge"></select></label>
+      <label class="f ev-chk"><input type="checkbox" id="evCodeExec"><span>允许执行模型生成的代码（隔离子进程沙箱，HumanEval 必需）</span></label>
+      <div class="small muted mb12" id="evSuiteDesc">请先在上方选择一个评测套件。</div>
+      <div class="small muted mb12" id="evEstimate"></div>
+      <div class="btn-row">
+        <button class="btn primary" id="btnRunEval" disabled>开始评测</button>
+        <button class="btn danger" id="btnStopEval" disabled>停止</button>
+      </div>
+      <div class="mt12" id="evProgress"></div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h3>评测结果 <span class="hint" id="evResultHint"></span></h3>
+        <div id="evSummary"><div class="empty">尚未运行评测</div></div>
+      </div>
+      <div class="card mt12">
+        <h3>逐题明细 <span class="hint">
+          <button class="btn sm" id="btnEvCsv" disabled>导出 CSV</button>
+          <button class="btn sm" id="btnEvJson" disabled>导出 JSON</button>
+          <button class="btn sm" id="btnEvReport" disabled>看报告</button></span></h3>
+        <div class="table-wrap" style="max-height:430px;overflow-y:auto">
+          <table>
+            <thead><tr><th>题号</th><th>标签</th><th>判定</th><th>详情</th><th class="num">TTFT</th><th class="num">E2E</th><th class="num">Decode</th><th>回答</th></tr></thead>
+            <tbody id="evItemTable"><tr><td colspan="8" class="empty">尚未运行评测</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h3>评测套件 <span class="hint" id="evSuiteHint">点击卡片选择要跑的套件</span></h3>
+    <div id="evSuiteList"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="card">
+    <h3>指标覆盖清单 <span class="hint" id="evCoverHint"></span></h3>
+    <div id="evCatalog"><div class="empty">加载中…</div></div>
+  </div>
+
+  <div class="row r2">
+    <div class="card">
+      <h3>效率与资源指标 <span class="hint"><button class="btn sm" id="btnEffReload">刷新</button></span></h3>
+      <div id="evEff"><div class="empty">请选择连接档案后刷新</div></div>
+    </div>
+    <div class="card">
+      <h3>冷启动时间 <span class="hint"><button class="btn sm" id="btnColdStart">开始探测</button></span></h3>
+      <div id="evCold"><div class="empty">尚未探测。Ollama 可测真实权重加载耗时；llama.cpp 常驻服务只能给出代理指标。</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. 并发压测 ============ -->
+<section class="panel" id="panel-loadtest">
+  <div class="sec-title">并发负载压测 <span class="tag">阶梯加压 · 自动熔断</span></div>
+  <div class="sec-desc">回答「这台机器最多能扛多少并发、多少 QPS」。错误率超过 20% 或显存超过 95% 时自动停止，避免 OOM 拖垮机器。</div>
+
+  <div class="row r-1-2">
+    <div class="card">
+      <h3>压测配置</h3>
+      <label class="f"><span>连接档案</span><select id="ltConn"></select></label>
+      <label class="f"><span>模型</span><select id="ltModel"></select></label>
+      <label class="f"><span>加压模式</span>
+        <select id="ltMode">
+          <option value="fixed">固定并发</option>
+          <option value="stage">阶梯加压（1→2→4→8…）</option>
+        </select></label>
+      <div id="ltFixedBox">
+        <label class="f"><span>并发数</span><input type="number" id="ltConcurrency" value="8" min="1" max="256"></label>
+      </div>
+      <div id="ltStageBox" style="display:none">
+        <label class="f"><span>起始并发</span><input type="number" id="ltStartC" value="1" min="1" max="64"></label>
+        <label class="f"><span>最大并发</span><input type="number" id="ltMaxC" value="16" min="1" max="256"></label>
+        <label class="f"><span>每级持续（秒）</span><input type="number" id="ltStageSec" value="30" min="5" max="600"></label>
+      </div>
+      <label class="f"><span id="ltDurLabel">持续时长（秒）</span><input type="number" id="ltDuration" value="60" min="5" max="3600"></label>
+      <label class="f"><span>max_tokens</span><input type="number" id="ltMaxTokens" value="256" min="16" max="4096" step="16"></label>
+      <label class="f"><span>温度</span><input type="number" id="ltTemp" value="0.7" min="0" max="2" step="0.1"></label>
+      <label class="f"><span>Prompt 池（每行一条，随机抽取）</span>
+        <textarea id="ltPrompts" style="min-height:96px">请用三句话说明本地大模型的推理性能瓶颈。
+写一个 Python 函数，判断字符串是否为回文。
+用一句话解释什么是 KV Cache。</textarea></label>
+      <div class="small muted mb12" id="ltPlan"></div>
+      <div class="btn-row">
+        <button class="btn green" id="btnStartLt">启动压测</button>
+        <button class="btn danger" id="btnStopLt" disabled>停止压测</button>
+      </div>
+    </div>
+
+    <div>
+      <div class="row r4">
+        <div class="kpi green"><div class="label">当前 QPS</div><div class="value" id="lt-qps">0</div><div class="sub" id="lt-qpsSub">滑动 5s 窗口</div></div>
+        <div class="kpi blue"><div class="label">平均延迟</div><div class="value" id="lt-avg">0<span class="unit">ms</span></div><div class="sub">成功请求 E2E</div></div>
+        <div class="kpi yellow"><div class="label">P99 延迟</div><div class="value" id="lt-p99">0<span class="unit">ms</span></div><div class="sub">尾延迟</div></div>
+        <div class="kpi red"><div class="label">错误率</div><div class="value" id="lt-err">0<span class="unit">%</span></div><div class="sub" id="lt-done">已完成 0</div></div>
+      </div>
+      <div class="row r2">
+        <div class="card"><h3>QPS 与并发数 <span class="hint">双 Y 轴</span></h3><div class="chart" id="chart-lt-qps"></div></div>
+        <div class="card"><h3>延迟曲线 <span class="hint">平均 / P99</span></h3><div class="chart" id="chart-lt-lat"></div></div>
+      </div>
+      <div class="row r2">
+        <div class="card"><h3>错误率 <span class="hint">%</span></h3><div class="chart short" id="chart-lt-err"></div></div>
+        <div class="card"><h3>实时资源 <span class="hint">GPU / VRAM</span></h3><div class="chart short" id="chart-lt-gpu"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row r-2-1">
+    <div class="card"><h3>阶梯结果</h3>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th class="num">并发</th><th class="num">计划时长</th><th class="num">请求数</th><th class="num">成功</th><th class="num">QPS</th><th class="num">平均 TPS</th><th class="num">平均 TTFT</th><th class="num">平均 E2E</th><th class="num">P99 E2E</th><th class="num">错误率</th></tr></thead>
+          <tbody id="ltStageTable"><tr><td colspan="10" class="empty">尚未压测</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+    <div class="card"><h3>压测报告 <span class="hint"><button class="btn sm" id="btnLtReport">查看 Markdown 报告</button></span></h3>
+      <div id="ltReport"><div class="empty">压测结束后生成摘要</div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 5. 历史对比 ============ -->
+<section class="panel" id="panel-history">
+  <div class="sec-title">历史数据与报告 <span class="tag">趋势对比</span></div>
+  <div class="sec-desc">按模型 / 类型 / 时间筛选历史测试，勾选 2 条以上叠加对比，可导出 JSON / CSV / Markdown 报告。</div>
+
+  <div class="card mb12">
+    <div class="row r4" style="margin-bottom:0">
+      <label class="f" style="margin:0"><span>模型名（模糊匹配）</span><input id="fModel" placeholder="如 qwen"></label>
+      <label class="f" style="margin:0"><span>测试类型</span>
+        <select id="fType">
+          <option value="">全部</option>
+          <option value="single">单条对话</option>
+          <option value="benchmark">基准套件</option>
+          <option value="loadtest">并发压测</option>
+        </select></label>
+      <label class="f" style="margin:0"><span>起始日期</span><input type="date" id="fFrom"></label>
+      <label class="f" style="margin:0"><span>结束日期</span><input type="date" id="fTo"></label>
+    </div>
+    <div class="btn-row mt12">
+      <button class="btn primary" id="btnQueryRuns">查询</button>
+      <button class="btn" id="btnResetFilter">重置</button>
+      <button class="btn" id="btnCompareRuns">对比选中项</button>
+      <span class="small muted" id="histCount"></span>
+    </div>
+  </div>
+
+  <div class="card mb12">
+    <h3>测试记录</h3>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th style="width:34px"></th><th>#</th><th>时间</th><th>类型</th><th>模型</th><th>档案</th><th class="num">并发</th><th class="num">请求</th><th class="num">TPS</th><th class="num">TTFT</th><th class="num">P50</th><th class="num">P99</th><th class="num">错误率</th><th>状态</th><th></th></tr></thead>
+        <tbody id="histTable"><tr><td colspan="15" class="empty">加载中…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="row r2">
+    <div class="card"><h3>对比图表 <span class="hint">勾选记录后点击「对比选中项」</span></h3><div class="chart tall" id="chart-hist"></div></div>
+    <div class="card"><h3>单条详情</h3><div class="scroll-y" id="histDetail"><div class="empty">点击列表中的「详情」查看</div></div></div>
+  </div>
+</section>
+
+<!-- ============ 6. 告警 ============ -->
+<section class="panel" id="panel-alerts">
+  <div class="sec-title">告警与阈值 <span class="tag">本地判定</span></div>
+  <div class="sec-desc">阈值触发时指标卡变红并弹出桌面通知（浏览器 Notification API），同时写入告警日志。同一规则 60 秒内只记录一次。</div>
+
+  <div class="row r-1-2">
+    <div class="card">
+      <h3>阈值规则 <span class="hint"><button class="btn sm" id="btnSaveRules">保存规则</button></span></h3>
+      <label class="f" style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="alertsEnabled" checked><span style="margin:0">启用告警引擎</span>
+      </label>
+      <div id="rulesList"></div>
+      <hr style="border:none;border-top:1px solid var(--border);margin:14px 0">
+      <label class="f" style="display:flex;gap:8px;align-items:center">
+        <input type="checkbox" id="notifyEnabled"><span style="margin:0">启用浏览器桌面通知</span>
+      </label>
+      <button class="btn sm mt8" id="btnRequestNotify">申请通知权限</button>
+    </div>
+
+    <div class="card">
+      <h3>告警日志 <span class="hint">
+        <button class="btn sm" id="btnAckAll">全部标记已读</button>
+        <button class="btn sm" id="btnClearAlerts">清空</button>
+        <button class="btn sm" id="btnRefreshAlerts">刷新</button></span></h3>
+      <div class="table-wrap" style="max-height:520px;overflow-y:auto">
+        <table>
+          <thead><tr><th>时间</th><th>级别</th><th>指标</th><th class="num">实际值</th><th class="num">阈值</th><th>说明</th></tr></thead>
+          <tbody id="alertTable"><tr><td colspan="6" class="empty">暂无告警</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<div class="toast-wrap" id="toasts"></div>
+
+<div class="modal-mask" id="modalMask">
+  <div class="modal">
+    <h3 id="modalTitle">详情</h3>
+    <div id="modalBody"></div>
+    <div class="btn-row mt12">
+      <button class="btn primary" id="modalClose">关闭</button>
+      <button class="btn" id="modalCopy">复制内容</button>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+<script src="/chat.js"></script>
+<script src="/eval.js"></script>
+</body>
+</html>
