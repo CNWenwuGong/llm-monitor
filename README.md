@@ -427,11 +427,23 @@ APP_URL=http://127.0.0.1:8099 .venv/Scripts/python.exe tools/unlimited_probe.py
 > （重新生成要先 DELETE 旧回答），这段空窗期里"运行中"仍是 false——直接轮询 `!running`
 > 会**立刻返回 true**，读到的正好是"旧回答已删、新回答还没生成"的中间态（实测表现为
 > `msgCount 5→3`、`roles=user,assistant,user` 的假失败）。脚本里用 `waitRun()` 两段式等待解决。
+> `capture_docs.mjs` 里的 `waitTask()` 是同一个道理：压测/基准的按钮点下去后也是异步置位，
+> 不等"先变 disabled"就会截到「压测进行中、表格还空着」的废图。
 
-> **前端语法闸门**：`verify_eval_ui.mjs` 在连浏览器之前，会先把服务端返回的 `/app.js`、`/eval.js`
-> 抓下来解析一遍（`new Function`，只解析不执行）。踩过一次坑——模板串里嵌三元漏了一个 `else`
-> 分支，整个 `eval.js` 静默失效，页面只是"像没加载完"，控制台仅一行 SyntaxError，极易误判成网络慢。
-> 任何脚本解析失败直接 `exit 3`，把问题挡在浏览器之前。
+> **整页截图前要回到顶部**：`Page.captureScreenshot{captureBeyondViewport:true}` 在页面已滚动时，
+> 会把 `position: fixed` 的顶栏渲染到页面**中部**，出来一条"重影"的导航条。
+> `capture_docs.mjs` 因此每次整页截图前都先 `window.scrollTo(0, 0)`。
+
+> **前端语法闸门**：`verify_eval_ui.mjs` / `verify_chat_ui.mjs` 在连浏览器之前，会先把服务端返回的
+> `/app.js`、`/eval.js`、`/chat.js` 抓下来解析一遍（`new Function`，只解析不执行）。踩过一次坑——
+> 模板串里嵌三元漏了一个 `else` 分支，整个 `eval.js` 静默失效，页面只是"像没加载完"，
+> 控制台仅一行 SyntaxError，极易误判成网络慢。任何脚本解析失败直接 `exit 3`，把问题挡在浏览器之前。
+>
+> **DOM 契约闸门**：同一个闸门还会核查「JS 里 `$('x')` 引用的 id 是否真的存在」——改版时删掉或注释掉
+> 一段 HTML、却忘了 JS 还在写它，这种问题**不会有语法错**，只在运行时抛一次
+> `Cannot set properties of null`。踩过一次：看板双栏改版把 `#intervalTxt` 注释掉了，
+> `app.js` 里那句赋值让每条 WebSocket `hello` 消息都抛一次异常，潜伏了很久。
+> 现在两侧脚本都会先比对 `frontend/index.html` 的 id 集合，索引到不存在的元素即 `exit 3`。
 >
 > 脚本的 stdout 是**纯 JSON**（便于管道给 `jq` / Python 解析），进度与失败信息全部走 stderr；
 > 断言不过会 `exit 2`。
