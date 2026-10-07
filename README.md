@@ -11,6 +11,8 @@ FastAPI + WebSocket + SQLite + ECharts 5 · 薄前端 + 本地采集后端两层
 七个面板：**实时看板**（左性能 / 右对话）· **连接管理** · **基准套件** · **评测中心** ·
 **并发压测** · **历史对比** · **告警阈值**。
 
+也可以一键打成 **18 MB 的单文件 exe**，双击即用、不依赖 Python 环境 —— 见第 2 章。
+
 ---
 
 ## 1. 快速开始
@@ -36,12 +38,122 @@ python -m uvicorn backend.main:app --host 0.0.0.0 --port 8080
 **开箱即用**：首次启动会自动种入一个「内置演示模型」连接档案，无需任何真实推理服务即可体验
 全部功能（含模拟流式输出、性能打点、压测曲线）。要接入真实服务，到「连接管理」新增即可。
 
-> 环境要求：Python 3.11+。GPU 指标依赖 NVIDIA 驱动；无 NVIDIA 设备时自动降级为
+> 环境要求：Python 3.10+。GPU 指标依赖 NVIDIA 驱动；无 NVIDIA 设备时自动降级为
 > 「模拟 GPU」曲线（界面会明确标注「GPU 模拟数据」），不会报错。
 
 ---
 
-## 2. 目录结构
+## 2. 打包成桌面程序
+
+整套东西（后端 + 前端 + ECharts）可以打成一个 **18 MB 的单文件 exe**，双击就用：
+不用装 Python、不用开命令行、不用记端口。窗口用的是系统自带的 WebView2（Edge 内核），
+**关掉窗口服务跟着退**。
+
+### 2.1 一键打包
+
+```bat
+desktop\build.bat
+```
+
+产物 `dist\LLM-Monitor.exe`。脚本会自动装齐 `pywebview` + `pyinstaller`、生成图标，
+再按 `desktop/llm_monitor.spec` 打包。macOS / Linux 用 `bash desktop/build.sh`。
+
+要**目录版**（`dist/LLM-Monitor/`，35 MB，可整目录拷给同事）：
+
+```bat
+desktop\build.bat onedir
+```
+
+> 两种形态实测冷启动都是 **2.5 秒**左右（瓶颈是采集器初始化，不是解压），
+> 所以默认给单文件——省得纠结"拷 exe 还是拷文件夹"。
+
+> **为什么是 pywebview 而不是 Electron / Tauri**：后端本来就是 Python + FastAPI，
+> pywebview 直接复用系统 WebView2，**和后端同进程**就把事办了，不需要再把 Python
+> 服务打成 sidecar 塞进 Node / Rust 壳里。省下的不只是一个数量级的体积，还有一整套
+> 构建链——`desktop/` 目录总共 4 个文件。
+
+### 2.2 桌面版和源码版的四处不同
+
+| | 源码版 `run.bat` | 桌面版 `LLM-Monitor.exe` |
+| --- | --- | --- |
+| 数据目录 | 项目下 `data/monitor.db` | `%APPDATA%\llm-monitor\monitor.db` |
+| 监听地址 | `0.0.0.0`（局域网可访问） | `127.0.0.1`（只本机，压测接口无鉴权） |
+| 端口 | 默认 8081，环境变量可配 | 优先 8081，被占用则自动挑空闲端口 |
+| 打开方式 | 浏览器访问 `http://localhost:8081` | 原生窗口，无地址栏 |
+
+![桌面版窗口](docs/screenshots/desktop-window.png)
+
+*打包后双击打开的窗口：没有地址栏、没有控制台，左右双栏照旧；图中 GPU 12.6/15.9 GB 是真实采集值。*
+
+**数据目录那条最关键**。单文件 exe 每次启动都会把自己解压到临时目录
+（`%TEMP%\_MEIxxxxxx`）再从那儿运行，数据库要是放进去，**每次打开历史记录都会是空的**。
+所以启动器会先把 `LLM_MONITOR_DB` 指到用户目录**再** import 后端——顺序不能反，
+因为 `backend/config.py` 是在 import 那一刻就把 `DB_PATH` 求值了的。
+
+### 2.3 端口、多开与命令行开关
+
+- 优先用 **8081**；被占用就自动挑一个空闲端口，永远不会跟你的推理服务抢。
+- **已在运行就复用**：再双击一次 exe 不会起第二个服务，而是直接连上已有实例——
+  否则两个采集器会往同一个库里重复写，图表跟着抖。
+- 需要指定端口或调试时：
+
+```bat
+LLM-Monitor.exe --port 8899      指定监听端口
+LLM-Monitor.exe --no-window      只起服务不开窗（自动化验证用）
+LLM-Monitor.exe --attach 8081    直接复用 8081 上的实例
+LLM-Monitor.exe --debug          窗口打开调试器
+```
+
+### 2.4 运行数据在哪
+
+```
+%APPDATA%\llm-monitor\
+├── monitor.db        监控采样 / 对话会话 / 测试记录
+├── logs\desktop.log  双击启动看不到控制台，日志都写这里
+├── webview\          WebView2 用户数据（localStorage 等界面偏好）
+└── runtime.json      本次运行的端口、库路径、PID —— 排查问题先看它
+```
+
+卸载 = 删掉这个目录 + exe，不往注册表里写任何东西。
+
+### 2.5 前置条件
+
+- Windows 10 1809+ / Windows 11，桌面壳依赖 **Microsoft Edge WebView2 运行时**
+  - Win11 与较新的 Win10 已预装；缺失时程序会**弹窗提示并给出官方下载地址**，不会静默崩溃
+  - pywebview 在 Windows 上还需要 .NET Framework 4.7.2+（Win10 / 11 自带）
+- 从源码重新打包才需要：`pip install -r desktop/requirements-desktop.txt`
+
+### 2.6 改图标 / 重新打包
+
+图标由 `desktop/make_icon.py` 用**纯标准库**（SDF 距离场，自带抗锯齿）生成，
+不依赖 Pillow，6 个尺寸各自按目标分辨率渲染：
+
+```bash
+.venv/Scripts/python.exe desktop/make_icon.py   # 改完配色常量重跑即可
+```
+
+改完 `frontend/` 记得重跑 `desktop\build.bat`；exe 版本号与产品名在 `desktop/version_info.txt`。
+
+### 2.7 怎么确认窗口不是白屏
+
+打包最容易踩的坑是「窗口起来了，里面是白的」（资源没收进包 / 动态导入失败），
+而 exe 没有控制台，报错也看不见。`tools/verify_desktop.mjs` 借 WebView2 的 CDP
+调试端口做真实断言 + 截图：
+
+```bash
+# 1) 带调试端口启动窗口（WebView2 官方的附加参数机制，pywebview 无需改代码）
+WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223 dist/LLM-Monitor.exe
+# 2) 另一个终端跑断言
+CDP_HTTP=http://127.0.0.1:9223 OUTDIR=shots node tools/verify_desktop.mjs
+```
+
+它断言的是「**这个宿主里前端真的跑起来了**」：`chrome.webview` 存在（证明是 WebView2 壳
+而非被系统浏览器接管）、WebSocket 已连上（`#wsStatus.on` + 文案「实时连接」）、三个
+ECharts 画布都出了图、对话面板 DOM 完整、控制台零异常，最后截一张窗口图。
+
+---
+
+## 3. 目录结构
 
 ```
 llm-monitor/
@@ -68,29 +180,37 @@ llm-monitor/
 │   ├── eval.js            评测中心逻辑：套件 / 进度 / 结果 / 指标清单 / 效率 / 冷启动
 │   ├── style.css          暗色开发者主题
 │   └── vendor/echarts.min.js  本地化的 ECharts（离线可用）
+├── desktop/               桌面端（打包成双击即用的 exe，见第 2 章）
+│   ├── app.py             启动器：主线程开窗 + 后台线程跑 uvicorn，数据目录重定向
+│   ├── llm_monitor.spec   PyInstaller 配置：收哪些资源 / 补哪些动态导入 / 排哪些大件
+│   ├── make_icon.py       纯标准库画图标（SDF 距离场），产出 6 尺寸 ICO
+│   ├── version_info.txt   exe 属性里的版本与产品名
+│   ├── build.bat / build.sh  一键打包
+│   └── requirements-desktop.txt  pywebview / pyinstaller
 ├── tools/
 │   ├── verify_ui.mjs      无头浏览器首屏验证（CDP）
 │   ├── verify_flows.mjs   无头浏览器全流程验证（CDP）
 │   ├── verify_eval_ui.mjs 评测中心验证（前端语法闸门 + 7 tab + 数值断言 + 真实跑套件）
 │   ├── verify_chat_ui.mjs 对话测试验证（语法闸门 + 富文本 + composer + 多轮记忆 / 续写 / 重生 / 全屏）
+│   ├── verify_desktop.mjs 打包后窗口验证（经 WebView2 的 CDP 端口断言渲染与宿主身份）
 │   ├── md_render_check.mjs 富文本渲染器离线校验（26 项：块级/行内/代码块/表格/XSS 转义）
-│   ├── capture_docs.mjs   文档截图采集：真跑一遍全流程再按统一视口出图（见第 4 章）
+│   ├── capture_docs.mjs   文档截图采集：真跑一遍全流程再按统一视口出图（见第 5 章）
 │   ├── eval_smoke.py      评测冒烟：用 demo 后端把 12 个套件各跑一遍并校验落库
 │   ├── chat_smoke.py      对话冒烟：多轮记忆 / 裁剪 / 去重 / 不截断 的纯后端断言
 │   └── unlimited_probe.py 真实后端「不限制输出长度」验证（证明没被固定长度上限砍断）
 ├── docs/screenshots/      README 用的界面截图（由 capture_docs.mjs 生成）
-├── data/monitor.db        SQLite 数据库（运行时生成）
+├── data/monitor.db        SQLite 数据库（运行时生成；桌面版在 %APPDATA%\llm-monitor）
 ├── requirements.txt
 ├── run.sh / run.bat
 ```
 
 ---
 
-## 3. 功能模块
+## 4. 功能模块
 
 | 模块 | 能力 |
 | --- | --- |
-| **实时看板** | **左右等宽双栏**：左半屏为性能指标看板 —— 8 个 KPI 卡（TPS / TTFT / E2E / 活跃请求+RPS / GPU / VRAM / CPU / RAM）+ TPS·E2E 双轴折线 + GPU·VRAM 面积图 + CPU·内存·进程 RSS 折线 + 服务原生指标 + 硬件信息 + 运行日志，时间窗口 1/5/15 分钟可切；右半屏为**正式的对话测试** —— Markdown 富文本回答（代码块带复制按钮）+ 圆角输入区（模型选择 / 回答长度胶囊 / 圆形发送）+ 多会话管理 + 流式长回答（默认不截断，见 5.5）+ 多轮上下文 + 长期记忆，实时打点 TTFT / E2E / TPS / Prompt&Completion Tokens / Token 利用率条，temperature、top_p、max_tokens、num_ctx、system prompt 全可调，**边聊边看左边资源曲线** |
+| **实时看板** | **左右等宽双栏**：左半屏为性能指标看板 —— 8 个 KPI 卡（TPS / TTFT / E2E / 活跃请求+RPS / GPU / VRAM / CPU / RAM）+ TPS·E2E 双轴折线 + GPU·VRAM 面积图 + CPU·内存·进程 RSS 折线 + 服务原生指标 + 硬件信息 + 运行日志，时间窗口 1/5/15 分钟可切；右半屏为**正式的对话测试** —— Markdown 富文本回答（代码块带复制按钮）+ 圆角输入区（模型选择 / 回答长度胶囊 / 圆形发送）+ 多会话管理 + 流式长回答（默认不截断，见 6.5）+ 多轮上下文 + 长期记忆，实时打点 TTFT / E2E / TPS / Prompt&Completion Tokens / Token 利用率条，temperature、top_p、max_tokens、num_ctx、system prompt 全可调，**边聊边看左边资源曲线** |
 | **连接管理** | 5 类后端预设自动填地址、连接测试拉取模型列表、心跳探测状态灯（10s）、多档案并存 |
 | **基准套件** | 5 个内置套件（冒烟 / 标准 / 长上下文 / 吞吐 / 全量回归，14 用例），一键跑完出 P50/P90/P99 表 + 箱线图 + 各用例 TPS/TTFT 柱线图 |
 | **评测中心** | 12 个评测套件，覆盖能力 / 效果 / 对齐安全三类：MMLU 多学科、GSM8K 数学、BBH 推理、HumanEval+MBPP 代码（pass@1/pass@k，可选真实代码执行沙箱）、MathVista、BLEU/ROUGE/CHRF++、NER F1、MT-Bench（可配裁判模型）、IFEval 指令遵循、LongBench、NIAH 长上下文热力矩阵、TruthfulQA 幻觉率、Safety 有害输出拒绝率与越狱成功率。三档模式（quick/standard/full）、逐题明细、CSV/JSON 导出、Markdown 报告；**指标覆盖清单**实时显示四大类 29 项的可用状态与来源 |
@@ -100,13 +220,13 @@ llm-monitor/
 
 ---
 
-## 4. 界面预览
+## 5. 界面预览
 
 > 下面每张图都由 `tools/capture_docs.mjs` 在 **1600×1000 视口 + 内置演示后端**下按真实操作流程
 > 采集——真发一轮对话、真跑一遍基准套件 / 评测套件 / 阶梯压测，而不是摆拍空状态。
 > 原图（含 1300 窄屏版）在 [`docs/screenshots/`](docs/screenshots/)。
 
-### 4.1 实时看板 —— 左边看资源，右边看对话
+### 5.1 实时看板 —— 左边看资源，右边看对话
 
 ![实时看板](docs/screenshots/01-dashboard.png)
 
@@ -122,7 +242,7 @@ llm-monitor/
 * 图里显存卡是红的，那是**真实采集值**（本机同时跑着一个 27B 的 llama.cpp 服务，
   15.1 / 15.9 GiB ≈ 95%，越过了 90% 的告警阈值），不是演示数据。
 
-### 4.2 连接管理
+### 5.2 连接管理
 
 ![连接管理](docs/screenshots/02-connections.png)
 
@@ -130,7 +250,7 @@ llm-monitor/
 选一个后端预设（Ollama / vLLM / llama.cpp / OpenAI 兼容 / 内置演示）会自动填好 Base URL 与默认端口，
 点「测试连接」会真的发一次请求并把模型列表拉回来。心跳探测每 10 秒刷新一次状态灯。
 
-### 4.3 基准测试
+### 5.3 基准测试
 
 ![基准测试](docs/screenshots/03-benchmark.png)
 
@@ -138,7 +258,7 @@ llm-monitor/
 跑完给出**延迟分位数箱线图**（TTFT / E2E / TPS 三维度）、**各用例 TPS 与 TTFT 柱线图**、
 **汇总统计**（平均 TPS、TTFT 与 E2E 的 P50/P90/P99、Token 总量、总耗时）以及逐用例明细表。
 
-### 4.4 评测中心
+### 5.4 评测中心
 
 ![评测中心 · 配置与结果](docs/screenshots/04-eval.png)
 
@@ -158,7 +278,7 @@ llm-monitor/
 KV Cache 随上下文长度的增长对照表；右侧是冷启动探测。**拿不到的指标就明确写「不支持」**
 （演示后端没有 PPL 能力，就直接标 PPL 不支持），演示后端的数值一律带「模拟数据」标识。
 
-### 4.5 并发压测
+### 5.5 并发压测
 
 ![并发压测](docs/screenshots/07-loadtest.png)
 
@@ -166,7 +286,7 @@ KV Cache 随上下文长度的增长对照表；右侧是冷启动探测。**拿
 逐级产出结果表；跑完给出压测报告（最大 QPS、**建议并发上限**、峰值 P99、平均 TTFT、
 平均生成速度、请求总数、生成 Token 总量）。错误率 > 20% 或显存 > 95% 会自动熔断。
 
-### 4.6 历史对比
+### 5.6 历史对比
 
 ![历史对比](docs/screenshots/08-history.png)
 
@@ -174,7 +294,7 @@ KV Cache 随上下文长度的增长对照表；右侧是冷启动探测。**拿
 TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV / JSON、生成 Markdown 报告。
 单条测试、基准、评测、压测的记录都会自动落库进来，图里就是同一个演示模型跑出来的 8 条历史。
 
-### 4.7 告警阈值
+### 5.7 告警阈值
 
 ![告警阈值](docs/screenshots/09-alerts.png)
 
@@ -183,7 +303,7 @@ TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV /
 上图里 5 条 `critical` 是真实采集值触发的（显存 95.1% > 90%），2 条 `warning` 是压测期间
 平均生成速度低于 100 tok/s 触发的。
 
-### 4.8 对话测试（全屏 · 富文本）
+### 5.8 对话测试（全屏 · 富文本）
 
 ![对话测试](docs/screenshots/10-chat-rich.png)
 
@@ -193,7 +313,7 @@ TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV /
 输入区是圆角 composer（左上：＋ 新建 / 回答长度胶囊 / 清空；右侧：模型选择 / 停止 / 圆形发送）。
 每条回答下可以复制、继续生成、重新生成、删除其后续。
 
-### 4.9 窄屏下的看板
+### 5.9 窄屏下的看板
 
 ![1300 宽下的看板](docs/screenshots/11-dashboard-1300.png)
 
@@ -206,9 +326,9 @@ TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV /
 
 ---
 
-## 5. 指标口径
+## 6. 指标口径
 
-### 5.1 延迟与吞吐
+### 6.1 延迟与吞吐
 
 * **TTFT** —— 发请求到收到第一个含文本 chunk 的毫秒数（流式响应里测，非流式时退化为 E2E）。
 * **TPS** —— `completion_tokens / (E2E - TTFT)`，与后端自报 `usage` 交叉验证；Ollama 直接取
@@ -223,7 +343,7 @@ TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV /
 * **RPS / 活跃请求** —— 后端自维护计数器，10 秒滑动窗口。
 * **VRAM** —— NVML 多卡求和；GPU 利用率/温度取多卡最大值。
 
-### 5.2 效率与资源
+### 6.2 效率与资源
 
 * **KV Cache** —— `bytes = slots × n_layer × n_ctx × n_head_kv × (key_len + value_len) × bytes_per_elem`。
   参数取自 llama-server 启动参数（`-c` / `--cache-type-k/-v` / `-np`）与 GGUF 元数据；
@@ -235,20 +355,20 @@ TTFT / E2E / P99 三条折线（双 Y 轴）；单条可看详情、导出 CSV /
 * **冷启动 / 模型加载** —— Ollama 用 `keep_alive: 0` 卸载后重发请求读 `load_duration`（真实加载耗时）；
   llama.cpp 常驻服务无法卸载，标注为「代理指标」并说明原因；演示后端标注「合成值」。
 
-### 5.3 评测指标
+### 6.3 评测指标
 
 判分结果按指标类型归一：`accuracy_mc` / `accuracy_numeric` / `pass_at_k` / `constraint_rate` /
 `rouge`（含 rougeL）/ `f1_extract` / `refusal_rate` / `jailbreak_rate` / `judge_score` / `niah`。
 派生指标包括幻觉率（TruthfulQA 反向）、rubric 覆盖率、NIAH 按上下文长度的通过矩阵。
 `judge_score` 无裁判模型时不臆测分数，改用 rubric 覆盖率并标注 `score_source`。
 
-### 5.4 不造数原则
+### 6.4 不造数原则
 
 任何拿不到的指标都返回不可用 + 原因，而不是填一个看起来像真的数字：
 PPL 不支持就返回 `{ok: false, reason}`；KV Cache 参数不全就放弃折算；
 演示后端的效率指标**公式真实、输入模拟**，一律带 `simulated: true`，前端显示明确的模拟数据标识。
 
-### 5.5 对话测试（会话 · 记忆 · 不截断 · 富文本）
+### 6.5 对话测试（会话 · 记忆 · 不截断 · 富文本）
 
 看板右半屏是一个**正式的聊天界面**（不是"试一句就断"的探针），设计约定如下：
 
@@ -310,7 +430,7 @@ PPL 不支持就返回 `{ok: false, reason}`；KV Cache 参数不全就放弃折
 
 ---
 
-## 6. 后端适配说明
+## 7. 后端适配说明
 
 `probe.py` 中每个后端一个 Adapter，统一产出
 `{delta, done, prompt_tokens, completion_tokens, meta}`：
@@ -349,7 +469,7 @@ PPL 不支持就返回 `{ok: false, reason}`；KV Cache 参数不全就放弃折
 
 ---
 
-## 7. API 一览
+## 8. API 一览
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -384,7 +504,7 @@ PPL 不支持就返回 `{ok: false, reason}`；KV Cache 参数不全就放弃折
 
 ---
 
-## 8. 安全与注意事项
+## 9. 安全与注意事项
 
 * **压测接口无鉴权**：只监听本机或内网，切勿暴露公网。
 * **熔断保护**：错误率 > 20% 或 VRAM > 95% 自动停止；开发自测请从 1~2 并发验证正确性后再加大。
@@ -397,7 +517,7 @@ PPL 不支持就返回 `{ok: false, reason}`；KV Cache 参数不全就放弃折
 
 ---
 
-## 9. 验证工具
+## 10. 验证工具
 
 `tools/` 下脚本用本机 Chrome 的 DevTools Protocol 做真实浏览器验证（无第三方依赖，
 仅用 Node 18+ 内置 `fetch` / `WebSocket`）。先启动服务，再启动带调试端口的 Chrome，然后运行：
@@ -416,11 +536,19 @@ CDP_HTTP=http://127.0.0.1:9224 TARGET_URL=http://127.0.0.1:8099 OUTDIR=shots \
   node tools/verify_chat_ui.mjs               # 对话测试：74 项断言，富文本 / 输入区 / 多轮记忆 / 不截断 / 续写 / 重生 / 全屏
 node tools/md_render_check.mjs                # 富文本渲染器离线校验（26 项，不需要浏览器与服务）
 CDP_HTTP=http://127.0.0.1:9224 TARGET_URL=http://127.0.0.1:8099 OUTDIR=docs/screenshots \
-  node tools/capture_docs.mjs                 # 界面截图采集：真跑全流程后出图，直接更新第 4 章那批图
+  node tools/capture_docs.mjs                 # 界面截图采集：真跑全流程后出图，直接更新第 5 章那批图
 .venv/Scripts/python.exe tools/chat_smoke.py  # 对话链路纯后端冒烟（36 项断言，无需浏览器，库走 $TEMP）
 APP_URL=http://127.0.0.1:8099 .venv/Scripts/python.exe tools/unlimited_probe.py
                                               # 真实后端「不限制输出长度」验证（默认打 127.0.0.1:8080）
+CDP_HTTP=http://127.0.0.1:9223 OUTDIR=shots node tools/verify_desktop.mjs
+                                              # 打包后的 exe 窗口：宿主身份 + 渲染 + 控制台干净（见第 2.7 节）
 ```
+
+> **桌面版窗口也能用 CDP 验证**：WebView2 认官方附加参数环境变量
+> `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS=--remote-debugging-port=9223`，
+> 启动 exe 前设上，就能像普通 Chrome 一样用同一套 CDP 工具连进去断言 + 截图，
+> pywebview 一行代码都不用改。这条对「打出来的 exe 到底白不白屏」是最直接的证据——
+> exe 没有控制台，光靠"双击一下看看"很容易漏掉资源 404 这类静默失败。
 
 > **按钮驱动的流式操作必须"先等开始、再等结束"**：`继续生成` / `重新生成` 走的是 click，
 > 拿不到 `send()` 的 promise。而 `send()` 在把运行标志置位前先 `await` 了一次网络往返
@@ -460,7 +588,7 @@ python tools/eval_smoke.py                 # 评测冒烟：demo 后端把 12 �
 
 ---
 
-## 10. 指标覆盖现状
+## 11. 指标覆盖现状
 
 「评测中心 → 指标覆盖清单」把指标分成四大类共 **29 项**并逐项标注可用性，
 当前 **已覆盖 27 项（93.1%）**：已内置 19 项、部分可用 8 项。
@@ -472,7 +600,7 @@ python tools/eval_smoke.py                 # 评测冒烟：demo 后端把 12 �
 
 ---
 
-## 11. 后续可扩展（V2）
+## 12. 后续可扩展（V2）
 
 多机分布式采集 agent、告警 Webhook（飞书/钉钉/企业微信）、模型版本与量化级别自动关联、
 业务 Prompt 回归库、报告导出 PDF、Docker Compose 一键编排。

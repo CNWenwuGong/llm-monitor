@@ -1,0 +1,8 @@
+# ===== 桌面端额外依赖 =====
+# 后端本体只需要 requirements.txt；下面这些是"打包成桌面程序"才需要的。
+#   .venv/Scripts/python.exe -m pip install -r desktop/requirements-desktop.txt
+
+pywebview>=5.0        # 原生窗口外壳，Windows 上渲染引擎是 WebView2
+pyinstaller>=6.0      # 打包成 exe
+# Windows 上 pywebview 依赖 pythonnet / clr_loader，pip 会自动一并装上；
+# 它们需要系统有 .NET Framework 4.7.2+（Win10/11 自带）。
